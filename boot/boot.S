@@ -66,7 +66,7 @@ protcseg:
   
   # Set up the stack pointer and call into C.
   movl    $start, %esp
-  call bootmain
+  call bootmain                #0x7d15
 
   # If bootmain returns (it shouldn't), loop.
 spin:
