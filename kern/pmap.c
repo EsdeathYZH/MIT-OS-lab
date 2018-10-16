@@ -445,7 +445,8 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 	if(pte_ptr == NULL){
 		return -E_NO_MEM;
 	}
-	//pp->pp_ref should be incremented if the insertion succeeds.
+	//pp->pp_ref should be incremented if the insertion succeeds.  
+	//NOTICE:To avoid corner-case hint, increment pp_ref first!!
 	pp->pp_ref++;
 	//If there is already a page mapped at 'va', it should be page_remove()d.
 	page_remove(pgdir, va);
