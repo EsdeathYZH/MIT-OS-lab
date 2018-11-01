@@ -59,7 +59,7 @@ struct Segdesc gdt[NCPU + 5] =
 };
 
 struct Pseudodesc gdt_pd = {
-	sizeof(gdt) - 1, (unsigned long) gdt
+	sizeof(gdt) - 1, (unsigned long)gdt
 };
 
 //
@@ -119,7 +119,15 @@ env_init(void)
 {
 	// Set up envs array
 	// LAB 3: Your code here.
-
+	env_free_list = envs;
+	for(int index = 0; index < NENV - 1; index++){
+		struct Env* env = envs + index;
+		env->env_id = 0;
+		env->env_link = env + 1;
+	}
+	struct Env* last_env = envs + NENV - 1;
+	last_env->env_id = 0;
+	last_env->env_link = NULL;
 	// Per-CPU part of the initialization
 	env_init_percpu();
 }
@@ -182,11 +190,49 @@ env_setup_vm(struct Env *e)
 	//    - The functions in kern/pmap.h are handy.
 
 	// LAB 3: Your code here.
-
+	p->pp_ref++;
+	e->env_pgdir = (pde_t*)page2kva(p);
+	memset(e->env_pgdir, 0, PGSIZE);
 	// UVPT maps the env's own page table read-only.
 	// Permissions: kernel R, user R
 	e->env_pgdir[PDX(UVPT)] = PADDR(e->env_pgdir) | PTE_P | PTE_U;
-
+	
+	//boot_map_region(e->env_pgdir, UPAGES, ROUNDUP(npages*sizeof(struct PageInfo), PGSIZE), PADDR((void*)pages), PTE_U);
+	for(int i = 0; i < ROUNDUP(npages*sizeof(struct PageInfo), PGSIZE)/PGSIZE; i++){
+		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(UPAGES + i*PGSIZE), 1);
+		if(pte_ptr == NULL){
+			panic("failed to alloc a pde!\n");
+			return -E_NO_MEM;
+		}
+		*pte_ptr = (PADDR((void*)pages) + i*PGSIZE) | (PTE_U|PTE_P) ;
+	}
+	//boot_map_region(e->env_pgdir, UENVS, ROUNDUP(NENV*sizeof(struct Env), PGSIZE), PADDR((void*)envs), PTE_U);
+	for(int i = 0; i < ROUNDUP(NENV*sizeof(struct Env), PGSIZE)/PGSIZE; i++){
+		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(UENVS + i*PGSIZE), 1);
+		if(pte_ptr == NULL){
+			panic("failed to alloc a pde!\n");
+			return -E_NO_MEM;
+		}
+		*pte_ptr = (PADDR((void*)envs) + i*PGSIZE) | (PTE_U|PTE_P) ;
+	}
+	//boot_map_region(e->env_pgdir, KSTACKTOP-KSTKSIZE, KSTKSIZE, PADDR(bootstack), PTE_W);
+	for(int i = 0; i < KSTKSIZE/PGSIZE; i++){
+		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(KSTACKTOP-KSTKSIZE + i*PGSIZE), 1);
+		if(pte_ptr == NULL){
+			panic("failed to alloc a pde!\n");
+			return -E_NO_MEM;
+		}
+		*pte_ptr = (PADDR(bootstack) + i*PGSIZE) | (PTE_W|PTE_P) ;
+	}
+	//boot_map_region(e->env_pgdir, (uintptr_t)KERNBASE, 1<<28, (physaddr_t)0, PTE_W);
+	for(int i = 0; i < (1<<28)/PGSIZE; i++){
+		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(KERNBASE + i*PGSIZE), 1);
+		if(pte_ptr == NULL){
+			panic("failed to alloc a pde!\n");
+			return -E_NO_MEM;
+		}
+		*pte_ptr = (i*PGSIZE) | (PTE_W|PTE_P) ;
+	}
 	return 0;
 }
 
@@ -279,6 +325,10 @@ region_alloc(struct Env *e, void *va, size_t len)
 	//   'va' and 'len' values that are not page-aligned.
 	//   You should round va down, and round (va + len) up.
 	//   (Watch out for corner-cases!)
+	for(int index = 0; index < (ROUNDUP((uint32_t)va+len, PGSIZE)-ROUNDDOWN((uint32_t)va, PGSIZE))/PGSIZE; index++){
+		struct PageInfo* page = page_alloc(ALLOC_ZERO);
+		page_insert(e->env_pgdir, page, ROUNDDOWN(va, PGSIZE) + index*PGSIZE, PTE_U | PTE_W);
+	}
 }
 
 //
@@ -335,11 +385,36 @@ load_icode(struct Env *e, uint8_t *binary)
 	//  What?  (See env_run() and env_pop_tf() below.)
 
 	// LAB 3: Your code here.
-
+	struct Elf* elf = (struct Elf*)binary;
+	struct Proghdr* program_header = (struct Proghdr*)(binary + elf->e_phoff);
+	uint16_t program_num = elf->e_phnum;
+	for(int index = 0;index < program_num; index++){
+		struct Proghdr* program = program_header + index;
+		if(program->p_type == ELF_PROG_LOAD){
+			uint32_t va_start = ROUNDDOWN(program->p_va, PGSIZE);
+			uint32_t va_offset = program->p_va - va_start;
+			uint32_t va_end = ROUNDUP(program->p_va + program->p_memsz, PGSIZE);
+			for(int pg_index = 0;pg_index < (va_end - va_start)/PGSIZE; pg_index++){
+				struct PageInfo* page = page_alloc(ALLOC_ZERO);
+				//If the program is too small
+				if((pg_index+1) * PGSIZE - va_offset >= program->p_filesz && pg_index == 0){
+					memcpy(page2kva(page) + va_offset, binary + program->p_offset, program->p_filesz);
+				}else if(pg_index == 0){
+					memcpy(page2kva(page) + va_offset, binary + program->p_offset, PGSIZE - va_offset);
+				}else if(((pg_index+1) * PGSIZE - va_offset >= program->p_filesz) && (pg_index * PGSIZE - va_offset < program->p_filesz)){
+					memcpy(page2kva(page), binary + program->p_offset + pg_index*PGSIZE - va_offset, program->p_filesz - pg_index*PGSIZE + va_offset);
+				}else if((pg_index+1) * PGSIZE - va_offset < program->p_filesz){
+					memcpy(page2kva(page), binary + program->p_offset + pg_index*PGSIZE - va_offset, PGSIZE);
+				}
+				page_insert(e->env_pgdir, page, (void*)va_start + pg_index*PGSIZE, PTE_U | PTE_W);
+			} 
+		}
+	}
 	// Now map one page for the program's initial stack
 	// at virtual address USTACKTOP - PGSIZE.
-
-	// LAB 3: Your code here.
+	struct PageInfo* stack_page = page_alloc(ALLOC_ZERO);
+	page_insert(e->env_pgdir, stack_page, (void*)USTACKTOP - PGSIZE, PTE_U | PTE_W);
+	e->env_tf.tf_eip = elf->e_entry;
 }
 
 //
@@ -352,7 +427,18 @@ load_icode(struct Env *e, uint8_t *binary)
 void
 env_create(uint8_t *binary, enum EnvType type)
 {
-	// LAB 3: Your code here.
+	struct Env* new_env;
+	// Returns 0 on success, < 0 on failure.  Errors include:
+	//	-E_NO_FREE_ENV if all NENV environments are allocated
+	//	-E_NO_MEM on memory exhaustion
+	int alloc_result = env_alloc(&new_env, 0);
+	if(alloc_result < 0){
+		panic(" : %e", alloc_result);
+		return;
+	}else{
+		load_icode(new_env, binary);
+		new_env->env_type = type;
+	}
 }
 
 //
@@ -483,7 +569,13 @@ env_run(struct Env *e)
 	//	e->env_tf to sensible values.
 
 	// LAB 3: Your code here.
-
-	panic("env_run not yet implemented");
+	if(curenv != NULL && curenv->env_status == ENV_RUNNING){
+		curenv->env_status = ENV_RUNNABLE;
+	}
+	curenv = e;
+	curenv->env_status = ENV_RUNNING;
+	curenv->env_runs++;
+	lcr3(PADDR(curenv->env_pgdir));
+	env_pop_tf(&curenv->env_tf);
 }
 

@@ -65,6 +65,25 @@ static const char *trapname(int trapno)
 	return "(unknown trap)";
 }
 
+extern void ENTRY_DIVIDE();
+extern void ENTRY_DEBUG();
+extern void ENTRY_NMI();
+extern void ENTRY_BRKPT();
+extern void ENTRY_OFLOW();
+extern void ENTRY_BOUND();
+extern void ENTRY_ILLOP();
+extern void ENTRY_DEVICE();
+extern void ENTRY_DBLFLT();
+extern void ENTRY_TSS();
+extern void ENTRY_SEGNP();
+extern void ENTRY_STACK();
+extern void ENTRY_GPFLT();
+extern void ENTRY_PGFLT();
+extern void ENTRY_FPERR();
+extern void ENTRY_ALIGN();
+extern void ENTRY_MCHK();
+extern void ENTRY_SIMDERR();
+extern void ENTRY_SYSCALL();
 
 void
 trap_init(void)
@@ -72,7 +91,26 @@ trap_init(void)
 	extern struct Segdesc gdt[];
 
 	// LAB 3: Your code here.
-
+	SETGATE(idt[T_DIVIDE], 0, GD_KT, ENTRY_DIVIDE, 0);
+	SETGATE(idt[T_DEBUG], 0, GD_KT, ENTRY_DEBUG, 0);
+	SETGATE(idt[T_NMI], 0, GD_KT, ENTRY_NMI, 0);
+	SETGATE(idt[T_BRKPT], 0, GD_KT, ENTRY_BRKPT, 3);
+	SETGATE(idt[T_OFLOW], 0, GD_KT, ENTRY_OFLOW, 0);
+	SETGATE(idt[T_BOUND], 0, GD_KT, ENTRY_BOUND, 0);
+	SETGATE(idt[T_ILLOP], 0, GD_KT, ENTRY_ILLOP, 0);
+	SETGATE(idt[T_DEVICE], 0, GD_KT, ENTRY_DEVICE, 0);
+	SETGATE(idt[T_DBLFLT], 0, GD_KT, ENTRY_DBLFLT, 0);
+	SETGATE(idt[T_TSS], 0, GD_KT, ENTRY_TSS, 0);
+	SETGATE(idt[T_SEGNP], 0, GD_KT, ENTRY_SEGNP, 0);
+	SETGATE(idt[T_STACK], 0, GD_KT, ENTRY_STACK, 0);
+	SETGATE(idt[T_GPFLT], 0, GD_KT, ENTRY_GPFLT, 0);
+	SETGATE(idt[T_PGFLT], 0, GD_KT, ENTRY_PGFLT, 0);
+	SETGATE(idt[T_FPERR], 0, GD_KT, ENTRY_FPERR, 0);
+	SETGATE(idt[T_ALIGN], 0, GD_KT, ENTRY_ALIGN, 0);
+	SETGATE(idt[T_MCHK], 0, GD_KT, ENTRY_MCHK, 0);
+	SETGATE(idt[T_SIMDERR], 0, GD_KT, ENTRY_SIMDERR, 0);
+	//system call
+	SETGATE(idt[T_SYSCALL], 0, GD_KT, ENTRY_SYSCALL, 3);
 	// Per-CPU setup 
 	trap_init_percpu();
 }
@@ -175,7 +213,6 @@ static void
 trap_dispatch(struct Trapframe *tf)
 {
 	// Handle processor exceptions.
-	// LAB 3: Your code here.
 
 	// Handle spurious interrupts
 	// The hardware sometimes raises these because of noise on the
@@ -190,6 +227,29 @@ trap_dispatch(struct Trapframe *tf)
 	// interrupt using lapic_eoi() before calling the scheduler!
 	// LAB 4: Your code here.
 
+	// Handle page fault
+	if(tf->tf_trapno == T_PGFLT){
+		if((tf->tf_cs & 3) == 0) {
+			panic("Page fault from kernel mode!");
+		}
+		page_fault_handler(tf);
+	}
+	//Handle int 3
+	if(tf->tf_trapno == T_BRKPT){
+		monitor(tf);
+	}
+	//Handle system call
+	if(tf->tf_trapno == T_SYSCALL){
+		int32_t result = syscall(tf->tf_regs.reg_eax, 
+				tf->tf_regs.reg_edx,
+				tf->tf_regs.reg_ecx,
+				tf->tf_regs.reg_ebx,
+				tf->tf_regs.reg_edi,
+				tf->tf_regs.reg_esi);
+		tf->tf_regs.reg_eax = result;
+		//这个return要有的
+		return;
+	}
 	// Unexpected trap: The user process or the kernel has a bug.
 	print_trapframe(tf);
 	if (tf->tf_cs == GD_KT)
