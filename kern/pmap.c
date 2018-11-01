@@ -11,12 +11,12 @@
 #include <kern/env.h>
 
 // These variables are set by i386_detect_memory()
-size_t npages;			// Amount of physical memory (in pages)
+size_t npages = 0;			// Amount of physical memory (in pages)
 static size_t npages_basemem;	// Amount of base memory (in pages)
 
 // These variables are set in mem_init()
-pde_t *kern_pgdir;		// Kernel's initial page directory
-struct PageInfo *pages;		// Physical page state array
+pde_t *kern_pgdir = NULL;		// Kernel's initial page directory    ???莫名其妙
+struct PageInfo *pages = NULL;		// Physical page state array
 static struct PageInfo *page_free_list;	// Free list of physical pages
 
 
@@ -180,7 +180,7 @@ mem_init(void)
 	//      (ie. perm = PTE_U | PTE_P)
 	//    - pages itself -- kernel RW, user NONE
 	// Your code goes here:
-	boot_map_region(kern_pgdir, UPAGES, ROUNDUP(npages*sizeof(struct PageInfo), PGSIZE), PADDR((void*)pages), PTE_U);
+	boot_map_region(kern_pgdir, UPAGES, ROUNDUP(npages*sizeof(struct PageInfo), PGSIZE), PADDR((void*)pages), PTE_W);
 
 	//////////////////////////////////////////////////////////////////////
 	// Map the 'envs' array read-only by the user at linear address UENVS
@@ -189,7 +189,7 @@ mem_init(void)
 	//    - the new image at UENVS  -- kernel R, user R
 	//    - envs itself -- kernel RW, user NONE
 	// LAB 3: Your code here.
-	boot_map_region(kern_pgdir, UENVS, ROUNDUP(NENV*sizeof(struct Env), PGSIZE), PADDR((void*)envs), PTE_U);
+	boot_map_region(kern_pgdir, UENVS, ROUNDUP(NENV*sizeof(struct Env), PGSIZE), PADDR((void*)envs), PTE_W);
 
 	//////////////////////////////////////////////////////////////////////
 	// Use the physical memory that 'bootstack' refers to as the kernel
@@ -562,7 +562,28 @@ int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 {
 	// LAB 3: Your code here.
-
+	uint32_t va_start = ROUNDDOWN((uint32_t)va, PGSIZE);
+	uint32_t va_end = ROUNDUP((uint32_t)va+len, PGSIZE);
+	for(uint32_t addr = va_start; addr < va_end; addr+=PGSIZE){
+		pte_t* pte;
+		struct PageInfo* page = page_lookup(env->env_pgdir, (void*)addr, &pte);
+		if(page == NULL || ((*pte) & PTE_P) == 0){
+			if(addr == va_start){
+				user_mem_check_addr = (uintptr_t)va;
+			}else{
+				user_mem_check_addr = (uintptr_t)addr;
+			}
+			return -E_FAULT;
+		}
+		if(((*pte) & perm) == 0 && addr >= ULIM){
+			if(addr == va_start){
+				user_mem_check_addr = (uintptr_t)va;
+			}else{
+				user_mem_check_addr = (uintptr_t)addr;
+			}
+			return -E_FAULT;
+		}
+	}
 	return 0;
 }
 
