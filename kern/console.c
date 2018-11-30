@@ -196,7 +196,8 @@ cga_putc(int c)
 		break;
 	}
 
-	// What is the purpose of this?
+	// What is the purpose of this? 
+	// A: If the buffer is full, add a new line.
 	if (crt_pos >= CRT_SIZE) {
 		int i;
 

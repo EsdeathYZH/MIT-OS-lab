@@ -62,7 +62,7 @@ struct Trapframe {
 	uint16_t tf_ds;
 	uint16_t tf_padding2;
 	uint32_t tf_trapno;
-	/* below here defined by x86 hardware */
+	/* below here defined by x86 hardware 这里以下都是硬件push！！*/
 	uint32_t tf_err;
 	uintptr_t tf_eip;
 	uint16_t tf_cs;

@@ -62,9 +62,9 @@ bootmain(void)
 
 	// call the entry point from the ELF header
 	// note: does not return!
-	((void (*)(void)) (ELFHDR->e_entry))();
+	((void (*)(void)) (ELFHDR->e_entry))();            //7d6b call *0x10018
 
-bad:
+bad:                          //0x7d21
 	outw(0x8A00, 0x8A00);
 	outw(0x8A00, 0x8E00);
 	while (1)
@@ -74,7 +74,7 @@ bad:
 // Read 'count' bytes at 'offset' from kernel into physical address 'pa'.
 // Might copy more than asked
 void
-readseg(uint32_t pa, uint32_t count, uint32_t offset)
+readseg(uint32_t pa, uint32_t count, uint32_t offset)     //0x7cdc
 {
 	uint32_t end_pa;
 
