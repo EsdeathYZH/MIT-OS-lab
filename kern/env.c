@@ -191,48 +191,14 @@ env_setup_vm(struct Env *e)
 
 	// LAB 3: Your code here.
 	p->pp_ref++;
-	e->env_pgdir = (pde_t*)page2kva(p);
+	e->env_pgdir = (pde_t*)page2kva(p);      //TODO:在执行这里代码的时候，如何寻址？为啥还是要按照初始化的时候来
 	memset(e->env_pgdir, 0, PGSIZE);
-	// UVPT maps the env's own page table read-only.
+	// UVPT maps the env's own page table read-only.//注意！！！每个env的pgtable在UTOP之上的部分复用kernpgdir
 	// Permissions: kernel R, user R
-	e->env_pgdir[PDX(UVPT)] = PADDR(e->env_pgdir) | PTE_P | PTE_U;
-	
-	//boot_map_region(e->env_pgdir, UPAGES, ROUNDUP(npages*sizeof(struct PageInfo), PGSIZE), PADDR((void*)pages), PTE_U);
-	for(int i = 0; i < ROUNDUP(npages*sizeof(struct PageInfo), PGSIZE)/PGSIZE; i++){
-		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(UPAGES + i*PGSIZE), 1);
-		if(pte_ptr == NULL){
-			panic("failed to alloc a pde!\n");
-			return -E_NO_MEM;
-		}
-		*pte_ptr = (PADDR((void*)pages) + i*PGSIZE) | (PTE_U|PTE_P) ;
+	for(int i = PDX(UTOP); i < NPDENTRIES; i++){
+		e->env_pgdir[i] = kern_pgdir[i];
 	}
-	//boot_map_region(e->env_pgdir, UENVS, ROUNDUP(NENV*sizeof(struct Env), PGSIZE), PADDR((void*)envs), PTE_U);
-	for(int i = 0; i < ROUNDUP(NENV*sizeof(struct Env), PGSIZE)/PGSIZE; i++){
-		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(UENVS + i*PGSIZE), 1);
-		if(pte_ptr == NULL){
-			panic("failed to alloc a pde!\n");
-			return -E_NO_MEM;
-		}
-		*pte_ptr = (PADDR((void*)envs) + i*PGSIZE) | (PTE_U|PTE_P) ;
-	}
-	//boot_map_region(e->env_pgdir, KSTACKTOP-KSTKSIZE, KSTKSIZE, PADDR(bootstack), PTE_W);
-	for(int i = 0; i < KSTKSIZE/PGSIZE; i++){
-		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(KSTACKTOP-KSTKSIZE + i*PGSIZE), 1);
-		if(pte_ptr == NULL){
-			panic("failed to alloc a pde!\n");
-			return -E_NO_MEM;
-		}
-		*pte_ptr = (PADDR(bootstack) + i*PGSIZE) | (PTE_W|PTE_P) ;
-	}
-	//boot_map_region(e->env_pgdir, (uintptr_t)KERNBASE, 1<<28, (physaddr_t)0, PTE_W);
-	for(int i = 0; i < (1<<28)/PGSIZE; i++){
-		pte_t* pte_ptr = pgdir_walk(e->env_pgdir, (const void*)(KERNBASE + i*PGSIZE), 1);
-		if(pte_ptr == NULL){
-			panic("failed to alloc a pde!\n");
-			return -E_NO_MEM;
-		}
-		*pte_ptr = (i*PGSIZE) | (PTE_W|PTE_P) ;
-	}
+	e->env_pgdir[PDX(UVPT)] = PADDR(e->env_pgdir) | PTE_P | PTE_U | PTE_W;
 	return 0;
 }
 
@@ -293,6 +259,7 @@ env_alloc(struct Env **newenv_store, envid_t parent_id)
 
 	// Enable interrupts while in user mode.
 	// LAB 4: Your code here.
+	e->env_tf.tf_eflags = e->env_tf.tf_eflags | FL_IF;
 
 	// Clear the page fault handler until user installs one.
 	e->env_pgfault_upcall = 0;
@@ -407,7 +374,7 @@ load_icode(struct Env *e, uint8_t *binary)
 					memcpy(page2kva(page), binary + program->p_offset + pg_index*PGSIZE - va_offset, PGSIZE);
 				}
 				page_insert(e->env_pgdir, page, (void*)va_start + pg_index*PGSIZE, PTE_U | PTE_W);
-			} 
+			}
 		}
 	}
 	// Now map one page for the program's initial stack
@@ -530,7 +497,7 @@ env_pop_tf(struct Trapframe *tf)
 {
 	// Record the CPU we are running on for user-space debugging
 	curenv->env_cpunum = cpunum();
-
+	unlock_kernel();
 	asm volatile(
 		"\tmovl %0,%%esp\n"
 		"\tpopal\n"
@@ -539,7 +506,7 @@ env_pop_tf(struct Trapframe *tf)
 		"\taddl $0x8,%%esp\n" /* skip tf_trapno and tf_errcode */
 		"\tiret\n"
 		: : "g" (tf) : "memory");
-	panic("iret failed");  /* mostly to placate the compiler */
+	panic("iret failed");  /* mostly to placate the compiler */  //TODO：什么时候切换的CPL？
 }
 
 //
@@ -569,13 +536,15 @@ env_run(struct Env *e)
 	//	e->env_tf to sensible values.
 
 	// LAB 3: Your code here.
-	if(curenv != NULL && curenv->env_status == ENV_RUNNING){
-		curenv->env_status = ENV_RUNNABLE;
+	if(curenv == NULL || curenv != e){
+		if(curenv != NULL && curenv->env_status == ENV_RUNNING){
+			curenv->env_status = ENV_RUNNABLE;
+		}
+		curenv = e;
+		curenv->env_status = ENV_RUNNING;
+		curenv->env_runs++;
+		lcr3(PADDR(curenv->env_pgdir));
 	}
-	curenv = e;
-	curenv->env_status = ENV_RUNNING;
-	curenv->env_runs++;
-	lcr3(PADDR(curenv->env_pgdir));
-	env_pop_tf(&curenv->env_tf);
+	env_pop_tf(&(e->env_tf));
 }
 

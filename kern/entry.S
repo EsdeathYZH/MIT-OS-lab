@@ -35,10 +35,10 @@
 .long CHECKSUM
 
 # '_start' specifies the ELF entry point.  Since we haven't set up
-# virtual memory when the bootloader enters this code, we need the
-# bootloader to jump to the *physical* address of the entry point.
+# virtual memory when the bootloader enters this code, we need the   因为还没开页表，所以entry的地址无法使用（因为在kernbase之上）
+# bootloader to jump to the *physical* address of the entry point.   //注意！！此处为物理地址
 .globl		_start
-_start = RELOC(entry)
+_start = RELOC(entry)  
 
 .globl entry
 entry:
@@ -58,12 +58,12 @@ entry:
 	movl	$(RELOC(entry_pgdir)), %eax
 	movl	%eax, %cr3
 	# Turn on paging.
-	movl	%cr0, %eax
+	movl	%cr0, %eax                      //当此处开启页表之后，我们才可以去访问kernbase之上的代码
 	orl	$(CR0_PE|CR0_PG|CR0_WP), %eax
 	movl	%eax, %cr0
 
 	# Now paging is enabled, but we're still running at a low EIP
-	# (why is this okay?).  Jump up above KERNBASE before entering
+	# (why is this okay?).  Jump up above KERNBASE before entering  因为我们此时的页表把[0, 4MB]也映射了
 	# C code.
 	mov	$relocated, %eax
 	jmp	*%eax
