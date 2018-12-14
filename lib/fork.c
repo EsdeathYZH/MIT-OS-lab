@@ -73,6 +73,11 @@ duppage(envid_t envid, unsigned pn)
 		if((pte & PTE_P) == 0 || (pte & PTE_U) == 0){
 			return 0;
 		}
+		else if(pte & PTE_SHARE){
+			if((r = sys_page_map(0, addr, envid, addr, pte&PTE_SYSCALL)) < 0){
+				panic("sys_page_map: %e", r);
+			}
+		}
 		else if((pte & PTE_W) || (pte & PTE_COW)){
 			/*
 			注意，此刻的顺序不可颠倒：因为现在parent正在修改栈，如果先把栈的地方设置成COW，
